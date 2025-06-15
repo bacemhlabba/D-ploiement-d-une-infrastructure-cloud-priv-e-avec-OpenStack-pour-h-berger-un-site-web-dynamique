@@ -17,6 +17,24 @@ L'architecture du projet comprend les composants OpenStack suivants:
 
 ## Instructions d'installation
 
+### 0. Script d'orchestration principal
+
+Pour une expérience simplifiée, vous pouvez utiliser le script d'orchestration principal qui vous guidera à travers toutes les étapes:
+
+```bash
+./openstack_deploy.sh
+```
+
+Ce script propose un menu interactif qui vous permettra de:
+- Installer OpenStack
+- Créer un projet et des utilisateurs
+- Déployer une machine virtuelle
+- Ajouter un volume de stockage
+- Déployer automatiquement WordPress avec Heat
+- Vérifier l'état des services OpenStack
+
+Vous pouvez également exécuter chaque étape individuellement comme décrit ci-dessous.
+
 ### 1. Installation d'OpenStack
 
 Pour installer OpenStack sur votre serveur:
