@@ -1,0 +1,167 @@
+heat_template_version: 2018-08-31
+
+description: Template to deploy a WordPress web application
+
+parameters:
+  image:
+    type: string
+    description: Image name or ID
+    default: "Ubuntu 20.04 Minimal"
+  
+  flavor:
+    type: string
+    description: Flavor name or ID
+    default: m1.small
+  
+  key_name:
+    type: string
+    description: SSH key name
+    default: webapp-key
+  
+  public_network:
+    type: string
+    description: Public network name or ID
+    default: ext-net
+  
+  volume_size:
+    type: number
+    description: Size of the data volume in GB
+    default: 10
+
+resources:
+  # Create private network
+  private_network:
+    type: OS::Neutron::Net
+    properties:
+      name: wordpress-network
+
+  # Create subnet
+  private_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: private_network }
+      cidr: 192.168.100.0/24
+      gateway_ip: 192.168.100.1
+      dns_nameservers: [8.8.8.8, 8.8.4.4]
+
+  # Create router
+  router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: public_network }
+
+  # Create router interface
+  router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: router }
+      subnet_id: { get_resource: private_subnet }
+
+  # Create security group
+  security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: wordpress-security-group
+      rules:
+        - protocol: tcp
+          port_range_min: 22
+          port_range_max: 22
+        - protocol: tcp
+          port_range_min: 80
+          port_range_max: 80
+        - protocol: tcp
+          port_range_min: 443
+          port_range_max: 443
+        - protocol: icmp
+
+  # Create data volume
+  data_volume:
+    type: OS::Cinder::Volume
+    properties:
+      size: { get_param: volume_size }
+      name: wordpress-data
+
+  # Create server
+  server:
+    type: OS::Nova::Server
+    properties:
+      name: wordpress-server
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - network: { get_resource: private_network }
+      security_groups:
+        - { get_resource: security_group }
+      user_data_format: RAW
+      user_data: |
+        #!/bin/bash
+        # Update system packages
+        apt-get update -y
+        apt-get upgrade -y
+
+        # Install Apache, MySQL, PHP
+        apt-get install -y apache2 mysql-server php libapache2-mod-php php-mysql
+
+        # Format and mount the volume
+        mkfs.ext4 /dev/vdb
+        mkdir -p /var/www/wordpress-data
+        mount /dev/vdb /var/www/wordpress-data
+        echo '/dev/vdb /var/www/wordpress-data ext4 defaults 0 0' >> /etc/fstab
+
+        # Configure MySQL
+        mysql -e "CREATE DATABASE wordpress DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci;"
+        mysql -e "CREATE USER 'wordpressuser'@'localhost' IDENTIFIED BY 'password';"
+        mysql -e "GRANT ALL ON wordpress.* TO 'wordpressuser'@'localhost';"
+        mysql -e "FLUSH PRIVILEGES;"
+
+        # Download and configure WordPress
+        cd /tmp
+        wget https://wordpress.org/latest.tar.gz
+        tar -xzvf latest.tar.gz
+        cp -a /tmp/wordpress/. /var/www/html/
+        chown -R www-data:www-data /var/www/html/
+        chmod -R 755 /var/www/html/
+
+        # Create WordPress configuration file
+        cp /var/www/html/wp-config-sample.php /var/www/html/wp-config.php
+        sed -i "s/database_name_here/wordpress/" /var/www/html/wp-config.php
+        sed -i "s/username_here/wordpressuser/" /var/www/html/wp-config.php
+        sed -i "s/password_here/password/" /var/www/html/wp-config.php
+
+        # Restart Apache
+        systemctl restart apache2
+
+  # Attach volume to server
+  volume_attachment:
+    type: OS::Cinder::VolumeAttachment
+    properties:
+      volume_id: { get_resource: data_volume }
+      instance_uuid: { get_resource: server }
+
+  # Create floating IP
+  floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: public_network }
+
+  # Associate floating IP
+  floating_ip_assoc:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: { get_resource: floating_ip }
+      port_id: { get_attr: [server, addresses, { get_resource: private_network }, 0, port] }
+
+outputs:
+  instance_name:
+    description: Name of the instance
+    value: { get_attr: [server, name] }
+  
+  instance_ip:
+    description: Public IP address of the instance
+    value: { get_attr: [floating_ip, floating_ip_address] }
+  
+  wordpress_url:
+    description: URL to access WordPress
+    value: { concat: ['http://', { get_attr: [floating_ip, floating_ip_address] }] }
